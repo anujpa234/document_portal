@@ -35,4 +35,9 @@ git commit -m "<commit message>"
 git push
 ```
 
+### For cloning my repo use this command
+
+```
+git clone https://github.com/anujpa234/document_portal.git
+```
 
