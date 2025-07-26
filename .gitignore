@@ -1,3 +1,6 @@
 env/
 .env
 document_portal.egg-info
+logs
+*.pyc
+test.pyc

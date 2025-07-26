@@ -5,3 +5,8 @@ langchain_core
 langchain_community
 langchain_groq
 langchain_google_genai
+pypdf
+ipykernel
+faiss-cpu
+structlog
+PyMuPDF
