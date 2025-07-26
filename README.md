@@ -1,70 +1,67 @@
-## Commands need to follow to run project
+# Project Setup Guide
 
+## Create Project Folder and Environment Setup
+
+```bash
+# Create a new project folder
 mkdir <project_folder_name>
 
+# Move into the project folder
 cd <project_folder_name>
 
-```
+# Open the folder in VS Code
 code .
-```
 
-## For conda environment setup
+# Create a new Conda environment with Python 3.10
+conda create -p <env_name> python=3.10 -y
 
-```
-conra create -p <env_name> python==3.10 -y
-```
+# Activate the environment (use full path to the environment)
+conda activate <path_of_the_env>
 
-```
+# Install dependencies from requirements.txt
 pip install -r requirements.txt
-```
 
-## GIT setup commands
-
-```
+# Initialize Git
 git init
-```
 
-```
+# Stage all files
 git add .
-```
 
-```
-git commit -m "<commit message>"
-```
-```
+# Commit changes
+git commit -m "<write your commit message>"
+
+# Push to remote (after adding remote origin)
 git push
+
+# Cloning the repository
+git clone https://github.com/sunnysavita10/document_portal.git
 ```
+## Minimum Requirements for the Project
 
-### For cloning my repo use this command
+### LLM Models
+- **Groq** (Free)
+- **OpenAI** (Paid)
+- **Gemini** (15 Days Free Access)
+- **Claude** (Paid)
+- **Hugging Face** (Free)
+- **Ollama** (Local Setup)
 
-```
-git clone https://github.com/anujpa234/document_portal.git
-```
+### Embedding Models
+- **OpenAI**
+- **Hugging Face**
+- **Gemini**
 
-### Min requirement for this project
-1. LLM Model ##Groq(freely), openai(paid), gemini(15 days free access), claude(paid), huggingface(freely), ollama(local setup).
+### Vector Databases
+- **In-Memory**
+- **On-Disk**
+- **Cloud-Based**
 
-2. Embedding model ##openai, hf, gemini
+## API Keys
 
-3. Vector Database : ## InMemory ##OnDisk ## CloudBased
+### GROQ API Key
+- [Get your API Key](https://console.groq.com/keys)  
+- [Groq Documentation](https://console.groq.com/docs/overview)
 
-
-## GROQ API KEY LINK
-
-```
-https://console.groq.com/keys
-```
-
-```
-https://console.groq.com/docs/overview
-```
-
-## GEMINI API KEY
-
-```
-https://aistudio.google.com/apikey
-```
-
-```
-https://ai.google.dev/gemini-api/docs/models
-```
+### Gemini API Key
+- [Get your API Key](https://aistudio.google.com/apikey)  
+- [Gemini Documentation](https://ai.google.dev/gemini-api/docs/models)
