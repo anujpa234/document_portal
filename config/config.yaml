@@ -1,0 +1,38 @@
+faiss_db:
+  collection_name: "document_portal"
+
+required_env_vars:
+  - "GEMINI_API_KEY"
+  - "GROQ_API_KEY"
+  - "OPENAI_API_KEY"
+
+embedding_model:
+  openai:
+    provider: "openai"
+    model_name: "text-embedding-3-large"
+  
+  google:
+    provider: "google"
+    model_name: "models/text-embedding-004"
+
+retriever:
+  top_k: 10
+
+llm:
+  groq:
+    provider: "groq"
+    model_name: "deepseek-r1-distill-llama-70b"
+    temperature: 0
+    max_output_tokens: 2048
+
+  google:
+    provider: "google"
+    model_name: "gemini-2.0-flash"
+    temperature: 0
+    max_output_tokens: 2048
+
+  openai:
+    provider: "openai"
+    model_name: "gpt-4o"
+    temperature: 0
+    max_output_tokens: 2048

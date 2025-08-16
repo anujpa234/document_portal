@@ -1,6 +1,11 @@
 env/
 .env
 document_portal.egg-info
-logs
+logs/
 *.pyc
-test.pyc
+test.py
+__pycache__/
+venv/
+archive/
+faiss_index/
+data/
