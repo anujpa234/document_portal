@@ -2,17 +2,14 @@ from __future__ import annotations
 import os
 import sys
 import json
-import uuid
 import hashlib
 import shutil
 from pathlib import Path
-from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Dict, Any
 
 import fitz  # PyMuPDF
 from langchain.schema import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
 from langchain_community.vectorstores import FAISS
 
 from utils.model_loader import ModelLoader
@@ -20,9 +17,8 @@ from logger.custom_logger import CustomLogger
 from exception.custom_exception import DocumentPortalException
 
 from utils.file_io import generate_session_id, save_uploaded_files
-from utils.document_ops import load_documents, concat_for_analysis, concat_for_comparison
+from utils.document_ops import load_documents
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
 # FAISS Manager (load-or-create)
 class FaissManager:
@@ -30,19 +26,23 @@ class FaissManager:
         self.index_dir = Path(index_dir)
         self.index_dir.mkdir(parents=True, exist_ok=True)
         
-        self.meta_path = self.index_dir / "ingested_meta.json"
+        self.meta_path = self.index_dir / "ingested_meta.json" # Deduplication Tracking File
         self._meta: Dict[str, Any] = {"rows": {}}
         
         if self.meta_path.exists():
             try:
                 self._meta = json.loads(self.meta_path.read_text(encoding="utf-8")) or {"rows": {}}
+                # if valid, Result: self._meta = {"rows": {"document.pdf::page_1": true}}
+                # if null, Result: self._meta = {"rows": {}} (due to or operator)
+                # if corrupted file, Result: self._meta = {"rows": {}} (due to exception handler)
             except Exception:
                 self._meta = {"rows": {}}
         
 
         self.model_loader = model_loader or ModelLoader()
-        self.emb = self.model_loader.load_embeddings()
-        self.vs: Optional[FAISS] = None
+        self.emb = self.model_loader.load_embeddings() 
+        self.vs: Optional[FAISS] = None # ALWAYS starts as None
+        # We DON'T load anything yet - just prepare the groundwork
         
     def _exists(self)-> bool:
         return (self.index_dir / "index.faiss").exists() and (self.index_dir / "index.pkl").exists()
@@ -73,8 +73,8 @@ class FaissManager:
             new_docs.append(d)
             
         if new_docs:
-            self.vs.add_documents(new_docs)
-            self.vs.save_local(str(self.index_dir))
+            self.vs.add_documents(new_docs) # Vectors added to RAM
+            self.vs.save_local(str(self.index_dir)) # Write RAM → Disk
             self._save_meta()
         return len(new_docs)
     
@@ -190,11 +190,13 @@ class DocHandler:
             if not filename.lower().endswith(".pdf"):
                 raise ValueError("Invalid file type. Only PDFs are allowed.")
             save_path = os.path.join(self.session_path, filename)
-            with open(save_path, "wb") as f:
-                if hasattr(uploaded_file, "read"):
-                    f.write(uploaded_file.read())
+            with open(save_path, "wb") as f:    
+                if hasattr(uploaded_file, "read"):  # uploaded_file = in-memory object (from web upload)
+                    f.write(uploaded_file.read())   # Takes memory content → writes to disk file 
+                    # Case 1: File-like objects (have read())
                 else:
                     f.write(uploaded_file.getbuffer())
+                    # Case 2: Buffer objects (have getbuffer())
             self.log.info("PDF saved successfully", file=filename, save_path=save_path, session_id=self.session_id)
             return save_path
         except Exception as e:

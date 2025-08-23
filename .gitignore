@@ -3,9 +3,11 @@ env/
 document_portal.egg-info
 logs/
 *.pyc
-test.py
 __pycache__/
 venv/
 archive/
 faiss_index/
 data/
+main_archive/
+test.py
+.DS_Store

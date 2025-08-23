@@ -20,7 +20,7 @@ class ModelLoader:
         
         load_dotenv()
         self.config=load_config()
-        log.info("Configuration loaded successfully", config_keys=list(self.config.keys()))
+        log.info("Configuration loaded successfully", config_keys=list(self.config.keys())) # "config_keys": ["faiss_db", "required_env_vars", "embedding_model", "retriever", "llm"]
         self._validate_env()
         
     def _validate_env(self):
@@ -34,7 +34,7 @@ class ModelLoader:
         if missing:
             log.error("Missing environment variables", missing_vars=missing)
             raise DocumentPortalException("Missing environment variables", sys)
-        log.info("Environment variables validated", available_keys=[k for k in self.api_keys if self.api_keys[k]])
+        log.info("Environment variables validated", available_keys=[k for k in self.api_keys if self.api_keys[k]]) # "available_keys": ["GEMINI_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"]
         
     def load_embeddings(self):
         """
