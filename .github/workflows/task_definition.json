@@ -48,7 +48,6 @@
           "awslogs-group": "/ecs/documentportaltd",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs",
-          "awslogs-create-group": "false",
           "mode": "non-blocking",
           "max-buffer-size": "25m"
         }
