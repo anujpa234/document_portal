@@ -22,23 +22,14 @@
       ],
       "environment": [
         {
-          "name": "LANGCHAIN_PROJECT",
-          "value": "DOCUMENT PORTAL"
+          "name": "ENV",
+          "value": "production"
         }
       ],
       "secrets": [
         {
-          "name": "GROQ_API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:218540697638:secret:GROQ_API_KEY"
-        },
-        
-        {
-          "name": "GOOGLE_API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:218540697638:secret:GOOGLE_API_KEY"
-        },
-        {
-          "name": "OPENAI_API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:218540697638:secret:OPENAI_API_KEY"
+          "name": "API_KEYS",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:218540697638:secret:api_keys-nZTtj8"
         }
         
       ],
