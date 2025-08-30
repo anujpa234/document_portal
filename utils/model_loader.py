@@ -13,7 +13,7 @@ log = CustomLogger().get_logger(__name__)
 
 
 class ApiKeyManager:
-    REQUIRED_KEYS = ["GROQ_API_KEY", "GOOGLE_API_KEY","OPENAI_API_KEY"]
+    REQUIRED_KEYS = ["GROQ_API_KEY", "GEMINI_API_KEY","OPENAI_API_KEY"]
 
     def __init__(self):
         self.api_keys = {}
@@ -41,7 +41,7 @@ class ApiKeyManager:
         missing = [k for k in self.REQUIRED_KEYS if not self.api_keys.get(k)]
         if missing:
             log.error("Missing required API keys", missing_keys=missing)
-            raise DocumentPortalException("Missing API keys", sys)
+            raise DocumentPortalException("Missing API keys", sys.exc_info())
 
         log.info("API keys loaded", keys={k: v[:6] + "..." for k, v in self.api_keys.items()})
 
