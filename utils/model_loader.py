@@ -36,7 +36,10 @@ class ApiKeyManager:
                 if env_val:
                     self.api_keys[key] = env_val
                     log.info(f"Loaded {key} from individual env var")
-
+        # Debug: Log all available env vars that might be API keys
+        debug_env = {k: v for k, v in os.environ.items() if 'API' in k or 'KEY' in k}
+        log.info(f"Available env vars with API/KEY: {list(debug_env.keys())}")
+        
         # Final check
         missing = [k for k in self.REQUIRED_KEYS if not self.api_keys.get(k)]
         if missing:
@@ -129,25 +132,29 @@ class ModelLoader:
         log.info("Loading LLM", provider=provider, model=model_name, temperature=temperature, max_tokens=max_tokens)
 
         if provider == "google":
+            api_key = self.api_key_mgr.get("GEMINI_API_KEY")
             llm=ChatGoogleGenerativeAI(
                 model=model_name,
+                google_api_key=api_key,
                 temperature=temperature,
                 max_output_tokens=max_tokens
             )
             return llm
 
         elif provider == "groq":
+            api_key = self.api_key_mgr.get("GROQ_API_KEY")
             llm=ChatGroq(
                 model=model_name,
-                api_key=self.api_keys["GROQ_API_KEY"],
+                api_key=api_key,
                 temperature=temperature,
             )
             return llm
             
         elif provider == "openai":
+            api_key = self.api_key_mgr.get("OPENAI_API_KEY")
             return ChatOpenAI(
                 model=model_name,
-                api_key=self.api_keys["OPENAI_API_KEY"],
+                api_key=api_key,
                 temperature=temperature,
                 max_tokens=max_tokens
             )
