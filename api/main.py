@@ -137,7 +137,8 @@ async def chat_query(
             "answer": response,
             "session_id": session_id,
             "k": k,
-            "engine": "LCEL-RAG"
+            "engine": "LCEL-RAG",
+            "cached": use_cache
         }
     except HTTPException:
         raise
