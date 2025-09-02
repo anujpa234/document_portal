@@ -7,12 +7,13 @@ from langchain_core.messages import BaseMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.vectorstores import FAISS
+from langchain.output_parsers import PydanticOutputParser
 
 from utils.model_loader import ModelLoader
 from exception.custom_exception import DocumentPortalException
 from logger.custom_logger import CustomLogger
 from prompt.prompt_library import PROMPT_REGISTRY
-from model.models import PromptType
+from model.models import PromptType, DocumentAnswer
 
 
 class ConversationalRAG:
@@ -155,16 +156,20 @@ class ConversationalRAG:
             # 2) Retrieve docs for rewritten question
             retrieve_docs = question_rewriter | self.retriever | self._format_docs
 
+            parser = PydanticOutputParser(pydantic_object=DocumentAnswer)
+            format_instructions = parser.get_format_instructions()
+            
             # 3) Answer using retrieved context + original input + chat history
             self.chain = (
                 {
                     "context": retrieve_docs,
                     "input": itemgetter("input"),
                     "chat_history": itemgetter("chat_history"),
+                    "format_instructions": lambda _: format_instructions,
                 }
                 | self.qa_prompt
                 | self.llm
-                | StrOutputParser()
+                | parser
             )
 
             self.log.info("LCEL graph built successfully", session_id=self.session_id)

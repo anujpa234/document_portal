@@ -52,6 +52,19 @@ context_qa_prompt = ChatPromptTemplate.from_messages([
     ("human", "{input}"),
 ])
 
+from langchain.output_parsers import PydanticOutputParser
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+# First, define your output parser
+class DocumentAnswer(BaseModel):
+    answer: str = Field(description="Direct answer to the user's question")
+    confidence: str = Field(description="Confidence level: high, medium, or low")
+    sources: List[str] = Field(description="List of source document names or sections")
+
+parser = PydanticOutputParser(pydantic_object=DocumentAnswer)
+
+
 PROMPT_REGISTRY = {
     "document_analysis": document_analysis_prompt,
     "document_comparison": document_comparison_prompt,
