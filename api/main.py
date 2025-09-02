@@ -114,6 +114,7 @@ async def chat_query(
     session_id: Optional[str] = Form(None),
     use_session_dirs: bool = Form(True),
     k: int = Form(5),
+    use_cache: bool = Form(True), 
 ) -> Any:
     try:
         if use_session_dirs and not session_id:
@@ -125,7 +126,12 @@ async def chat_query(
 
         rag = ConversationalRAG(session_id=session_id)
         rag.load_retriever_from_faiss(index_dir, k=k, index_name=FAISS_INDEX_NAME)  # build retriever + chain
-        response = rag.invoke_with_memory(question, chat_history=[])
+        
+        if use_cache:
+            response = rag.invoke_with_memory_and_cache(question)
+        else:
+            response = rag.invoke_with_memory(question) 
+        
 
         return {
             "answer": response,

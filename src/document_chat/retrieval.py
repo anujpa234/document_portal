@@ -19,6 +19,63 @@ from typing import List, Optional, Dict
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from datetime import datetime, timedelta
 
+
+from functools import wraps
+import hashlib
+import json
+from typing import Dict, Any
+import time
+
+class ResponseCache:
+    """Cache for complete RAG responses"""
+    
+    def __init__(self, ttl_seconds: int = 3600):  # 1 hour default
+        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.ttl_seconds = ttl_seconds
+    
+    def _generate_key(self, session_id: str, question: str, context_hash: str) -> str:
+        """Generate cache key from session + question + recent context"""
+        key_data = f"{session_id}:{question}:{context_hash}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+    
+    def _get_context_hash(self, history: list) -> str:
+        """Hash recent conversation context (last 4 messages)"""
+        recent_context = history[-4:] if len(history) > 4 else history
+        context_str = str([msg.content for msg in recent_context])
+        return hashlib.md5(context_str.encode()).hexdigest()[:8]
+    
+    def get(self, session_id: str, question: str, history: list) -> Any:
+        """Get cached response if available and not expired"""
+        context_hash = self._get_context_hash(history)
+        key = self._generate_key(session_id, question, context_hash)
+        
+        if key in self.cache:
+            cached_item = self.cache[key]
+            if time.time() - cached_item['timestamp'] < self.ttl_seconds:
+                return cached_item['response']
+            else:
+                del self.cache[key] # Removing expired key
+        return None
+    
+    def set(self, session_id: str, question: str, history: list, response: Any):
+        """Cache the response"""
+        context_hash = self._get_context_hash(history)
+        key = self._generate_key(session_id, question, context_hash)
+        
+        self.cache[key] = {
+            'response': response,
+            'timestamp': time.time()
+        }
+        
+        # Simple cleanup, removing old entries to control the cache in case it becomes too large
+        if len(self.cache) > 1000:  # Max 1000 cached responses
+            oldest_key = min(self.cache.keys(), 
+                           key=lambda k: self.cache[k]['timestamp'])
+            del self.cache[oldest_key]
+
+# Global cache instance
+response_cache = ResponseCache(ttl_seconds=1800)  # 30 minutes
+
 class ConversationMemory:
     """
     Manages chat history for conversational RAG sessions.
@@ -98,6 +155,9 @@ class ConversationalRAG:
             
             # Memory management
             self.memory = conversation_memory
+            
+            # Cache management
+            self.response_cache = response_cache  
 
             # Load LLM and prompts once
             self.llm = self._load_llm()
@@ -160,6 +220,78 @@ class ConversationalRAG:
         except Exception as e:
             self.log.error("Failed to invoke ConversationalRAG with memory", error=str(e))
             raise DocumentPortalException("Invocation with memory error", sys)
+    
+    def invoke_with_memory_and_cache(self, user_input: str) -> str:
+        """
+        Automatic memory management AND response caching.
+        """
+        try:
+            if self.chain is None:
+                raise DocumentPortalException(
+                    "RAG chain not initialized. Call load_retriever_from_faiss() before invoke().", sys
+                )
+            
+            # Get existing chat history from memory
+            chat_history = self.memory.get_history(self.session_id)
+            
+            # Checking the cache first
+            cached_response = self.response_cache.get(self.session_id, user_input, chat_history)
+            if cached_response is not None:
+                self.log.info("Cache hit - returning cached response", 
+                            session_id=self.session_id, user_input=user_input[:50])
+                
+                # Add to memory for conversation continuity
+                answer_text = cached_response.answer if hasattr(cached_response, 'answer') else str(cached_response)
+                self.memory.add_exchange(self.session_id, user_input, answer_text)
+                
+                return cached_response
+            
+            self.log.info("Cache miss - generating new response", 
+                        session_id=self.session_id, user_input=user_input[:50])
+            
+            # Invoke the chain with history
+            payload = {"input": user_input, "chat_history": chat_history}
+            answer = self.chain.invoke(payload)
+            
+            if not answer:
+                self.log.warning("No answer generated", user_input=user_input, session_id=self.session_id)
+                return "no answer generated."
+            
+            # Extract answer text
+            answer_text = answer.answer if hasattr(answer, 'answer') else str(answer)
+            
+            # Cache the response
+            self.response_cache.set(self.session_id, user_input, chat_history, answer)
+            
+            # Add exchange to memory
+            self.memory.add_exchange(self.session_id, user_input, answer_text)
+            
+            self.log.info(
+                "Chain invoked with memory and cache successfully",
+                session_id=self.session_id,
+                user_input=user_input,
+                history_length=len(chat_history),
+                answer_preview=answer_text[:150],
+                cached=False
+            )
+            
+            return answer
+            
+        except Exception as e:
+            self.log.error("Failed to invoke ConversationalRAG with memory and cache", error=str(e))
+            raise DocumentPortalException("Invocation with memory and cache error", sys)
+
+    # Clear cache for session, optional if needed
+    def clear_cache(self):
+        """Clear cached responses for this session (useful when documents are updated)"""
+        keys_to_remove = [
+            key for key in self.response_cache.cache.keys() 
+            if key.startswith(f"{self.session_id}:")
+        ]
+        for key in keys_to_remove:
+            del self.response_cache.cache[key]
+        
+        self.log.info("Cache cleared for session", session_id=self.session_id)
     
     def clear_memory(self):
         """Clear conversation history for this session."""
