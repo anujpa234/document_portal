@@ -10,6 +10,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.output_parsers import PydanticOutputParser
 
 from utils.model_loader import ModelLoader
+from utils.token_counter import TokenCounter
 from exception.custom_exception import DocumentPortalException
 from logger.custom_logger import CustomLogger
 from prompt.prompt_library import PROMPT_REGISTRY
@@ -138,6 +139,9 @@ class ConversationMemory:
 # Global memory instance
 conversation_memory = ConversationMemory()
 
+# Global token counter instance
+token_counter = TokenCounter()
+
 class ConversationalRAG:
     """
     LCEL-based Conversational RAG with lazy retriever initialization.
@@ -179,6 +183,36 @@ class ConversationalRAG:
             self.log.error("Failed to initialize ConversationalRAG", error=str(e))
             raise DocumentPortalException("Initialization error in ConversationalRAG", sys)
 
+    def _get_model_name(self) -> str:
+        """Extract model name from LLM for cost tracking"""
+        try:
+            model_name = "unknown"
+            
+            # based on the attributes it will get model name
+            if hasattr(self.llm, 'model_name'):
+                model_name = self.llm.model_name
+            elif hasattr(self.llm, 'model'):
+                model_name = self.llm.model
+            elif hasattr(self.llm, '_model_name'):
+                model_name = self.llm._model_name
+            elif hasattr(self.llm, 'model_id'):
+                model_name = self.llm.model_id
+            
+            # For string representation fallback
+            elif hasattr(self.llm, '__class__'):
+                class_name = self.llm.__class__.__name__.lower()
+                if 'gemini' in class_name:
+                    model_name = "gemini-2.0-flash"
+                elif 'gpt' in class_name or 'openai' in class_name:
+                    model_name = "gpt-4o"
+            
+            self.log.info(f"Detected model name: {model_name}", session_id=self.session_id)
+            return model_name
+            
+        except Exception as e:
+            self.log.warning("Could not extract model name, defaulting to gpt-4o", error=str(e))
+            return "gpt-4o"  # Default to GPT-4o
+    
     # Method will be invoked for auto memory management
     def invoke_with_memory(self, user_input: str) -> str:
         """
