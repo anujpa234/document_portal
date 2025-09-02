@@ -15,6 +15,71 @@ from logger.custom_logger import CustomLogger
 from prompt.prompt_library import PROMPT_REGISTRY
 from model.models import PromptType, DocumentAnswer
 
+from typing import List, Optional, Dict
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from datetime import datetime, timedelta
+
+class ConversationMemory:
+    """
+    Manages chat history for conversational RAG sessions.
+    """
+    
+    def __init__(self, max_messages: int = 20, session_timeout_hours: int = 24):
+        self.sessions: Dict[str, List[BaseMessage]] = {}
+        self.session_timestamps: Dict[str, datetime] = {}
+        self.max_messages = max_messages
+        self.session_timeout_hours = session_timeout_hours
+        self.log = CustomLogger().get_logger(__name__)
+    
+    def get_history(self, session_id: str) -> List[BaseMessage]:
+        """Get chat history for a session."""
+        self._cleanup_expired_sessions()
+        return self.sessions.get(session_id, [])
+    
+    def add_exchange(self, session_id: str, user_input: str, ai_response: str):
+        """Add a user-AI exchange to session history."""
+        if session_id not in self.sessions:
+            self.sessions[session_id] = []
+        
+        # Add user message and AI response
+        self.sessions[session_id].extend([
+            HumanMessage(content=user_input),
+            AIMessage(content=ai_response)
+        ])
+        
+        # Trim to max_messages to manage context window size
+        if len(self.sessions[session_id]) > self.max_messages:
+            self.sessions[session_id] = self.sessions[session_id][-self.max_messages:]
+        
+        # Update timestamp
+        self.session_timestamps[session_id] = datetime.now()
+        
+        self.log.info("Added exchange to memory", session_id=session_id, 
+                     history_length=len(self.sessions[session_id]))
+    
+    def clear_session(self, session_id: str):
+        """Clear history for a specific session."""
+        self.sessions.pop(session_id, None)
+        self.session_timestamps.pop(session_id, None)
+        self.log.info("Cleared session memory", session_id=session_id)
+    
+    def _cleanup_expired_sessions(self):
+        """Remove expired sessions."""
+        cutoff = datetime.now() - timedelta(hours=self.session_timeout_hours)
+        expired_sessions = [
+            sid for sid, timestamp in self.session_timestamps.items() 
+            if timestamp < cutoff
+        ]
+        
+        for session_id in expired_sessions:
+            self.sessions.pop(session_id, None)
+            self.session_timestamps.pop(session_id, None)
+        
+        if expired_sessions:
+            self.log.info("Cleaned up expired sessions", count=len(expired_sessions))
+
+# Global memory instance
+conversation_memory = ConversationMemory()
 
 class ConversationalRAG:
     """
@@ -30,6 +95,9 @@ class ConversationalRAG:
         try:
             self.log = CustomLogger().get_logger(__name__)
             self.session_id = session_id
+            
+            # Memory management
+            self.memory = conversation_memory
 
             # Load LLM and prompts once
             self.llm = self._load_llm()
@@ -51,6 +119,58 @@ class ConversationalRAG:
             self.log.error("Failed to initialize ConversationalRAG", error=str(e))
             raise DocumentPortalException("Initialization error in ConversationalRAG", sys)
 
+    # Method will be invoked for auto memory management
+    def invoke_with_memory(self, user_input: str) -> str:
+        """
+        Automatic memory management 
+        """
+        try:
+            if self.chain is None:
+                raise DocumentPortalException(
+                    "RAG chain not initialized. Call load_retriever_from_faiss() before invoke().", sys
+                )
+            
+            # Get existing chat history from memory
+            chat_history = self.memory.get_history(self.session_id)
+            
+            # Invoke the chain with history
+            payload = {"input": user_input, "chat_history": chat_history}
+            answer = self.chain.invoke(payload)
+            
+            if not answer:
+                self.log.warning("No answer generated", user_input=user_input, session_id=self.session_id)
+                return "no answer generated."
+            
+            # Extract answer text (assuming DocumentAnswer model)
+            answer_text = answer.answer if hasattr(answer, 'answer') else str(answer)
+            
+            # Add this exchange to memory
+            self.memory.add_exchange(self.session_id, user_input, answer_text)
+            
+            self.log.info(
+                "Chain invoked with memory successfully",
+                session_id=self.session_id,
+                user_input=user_input,
+                history_length=len(chat_history),
+                answer_preview=answer_text[:150],
+            )
+            
+            return answer
+            
+        except Exception as e:
+            self.log.error("Failed to invoke ConversationalRAG with memory", error=str(e))
+            raise DocumentPortalException("Invocation with memory error", sys)
+    
+    def clear_memory(self):
+        """Clear conversation history for this session."""
+        self.memory.clear_session(self.session_id)
+        self.log.info("Memory cleared for session", session_id=self.session_id)
+        
+    def get_conversation_history(self) -> List[BaseMessage]:
+        """Get current conversation history."""
+        return self.memory.get_history(self.session_id)
+    
+       
     # ---------- Public API ----------
 
     def load_retriever_from_faiss(

@@ -1,6 +1,6 @@
 import os
 from typing import List, Optional, Any, Dict
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Query
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -125,7 +125,7 @@ async def chat_query(
 
         rag = ConversationalRAG(session_id=session_id)
         rag.load_retriever_from_faiss(index_dir, k=k, index_name=FAISS_INDEX_NAME)  # build retriever + chain
-        response = rag.invoke(question, chat_history=[])
+        response = rag.invoke_with_memory(question, chat_history=[])
 
         return {
             "answer": response,
@@ -138,8 +138,52 @@ async def chat_query(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {e}")
 
+# ---------- CHAT: CLEAR HISTORY ----------
+@app.post("/chat/clear-history")
+async def clear_chat_history(
+    session_id: str = Form(...)
+) -> Any:
+    """Clear conversation history for a session (start fresh)."""
+    try:
+        # You don't need to load retriever just to clear memory
+        rag = ConversationalRAG(session_id=session_id)
+        rag.clear_memory()
+        
+        return {
+            "message": "Conversation history cleared successfully",
+            "session_id": session_id,
+            "status": "success"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear history: {e}")
 
-
+# ---------- CHAT: GET CONVERSATION HISTORY ----------
+@app.get("/chat/history")
+async def get_chat_history(
+    session_id: str = Query(...)
+) -> Any:
+    """Get conversation history for a session."""
+    try:
+        rag = ConversationalRAG(session_id=session_id)
+        history = rag.get_conversation_history()
+        
+        # Format for frontend display
+        formatted_history = []
+        for i in range(0, len(history), 2):
+            if i + 1 < len(history):
+                formatted_history.append({
+                    "user_message": history[i].content,
+                    "ai_response": history[i + 1].content,
+                    "timestamp": "recent"  # You could add timestamps to messages
+                })
+        
+        return {
+            "history": formatted_history,
+            "session_id": session_id,
+            "total_exchanges": len(formatted_history)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get history: {e}")
 
 
 
