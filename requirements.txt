@@ -18,3 +18,5 @@ docx2txt==0.9
 langchain_openai==0.3.30
 ragas
 datasets
+rank-bm25
+sentence_transformers

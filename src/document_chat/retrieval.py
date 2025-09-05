@@ -13,6 +13,7 @@ from utils.model_loader import ModelLoader
 from utils.token_counter import TokenCounter
 from utils.rag_evaluator import RAGEvaluator
 from utils.guardrails import rag_guardrails, GuardrailResult
+from src.document_chat.advanced_retrieval import QueryEnhancer, QueryRouter, ContextCompressor, AnswerValidator
 
 
 from exception.custom_exception import DocumentPortalException
@@ -672,3 +673,54 @@ class ConversationalRAG:
                 reasoning="System error during response generation",
                 answer_type="error"
             )
+
+
+class AdvancedConversationalRAG(ConversationalRAG):
+    def __init__(self, session_id: Optional[str], retriever=None):
+        super().__init__(session_id, retriever)
+        
+        # Advanced components
+        self.query_enhancer = QueryEnhancer(self.llm)
+        self.query_router = QueryRouter(self.llm)
+        self.context_compressor = ContextCompressor(self.llm)
+        self.answer_validator = AnswerValidator(self.llm)
+        self.enable_advanced_features = True
+    
+    def advanced_invoke(self, user_input: str) -> str:
+        """Enhanced invoke with advanced RAG techniques"""
+        
+        if not self.enable_advanced_features:
+            return self.invoke_with_memory_and_cache(user_input)
+        
+        # 1. Query enhancement
+        enhanced_queries = self.query_enhancer.generate_multiple_queries(user_input)
+        intent = self.query_router.classify_intent(user_input)
+        
+        # 2. Dynamic retrieval strategy
+        retrieval_params = self.query_router.route_query(user_input, intent)
+        
+        # 3. Multi-query retrieval with re-ranking
+        all_contexts = []
+        for query in enhanced_queries:
+            contexts = self._retrieve_with_reranking(query, retrieval_params)
+            all_contexts.extend(contexts)
+        
+        # 4. Context compression and filtering
+        compressed_context = self.context_compressor.compress_context(
+            all_contexts, user_input
+        )
+        
+        # 5. Generate answer
+        answer = self._generate_with_context(user_input, compressed_context)
+        
+        # 6. Validate and self-correct
+        validation = self.answer_validator.validate_answer(
+            user_input, answer, compressed_context
+        )
+        
+        if validation["confidence"] < 0.7:
+            answer = self.answer_validator.self_correct(
+                user_input, answer, compressed_context, validation
+            )
+        
+        return answer
