@@ -1,4 +1,5 @@
 import os
+import sys
 from typing import List, Optional, Any, Dict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Query
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -6,8 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
-from datetime import datetime, time
-
+from datetime import datetime
+import time 
+# Add parent directories to path for custom imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.document_ingestion.data_ingestion import (
     DocHandler,
     DocumentComparator,
@@ -19,6 +22,9 @@ from src.document_chat.retrieval import ConversationalRAG
 from utils.document_ops import FastAPIFileAdapter, read_pdf_via_handler
 from utils.token_counter import TokenCounter
 from utils.rag_evaluator import rag_evaluator
+from utils.guardrails import rag_guardrails, GuardrailResult, GuardrailViolationType
+
+
 
 # Global token counter instance
 token_counter = TokenCounter()
@@ -122,6 +128,7 @@ async def chat_query(
     k: int = Form(5),
     use_cache: bool = Form(True), 
     include_cost_info: bool = Form(True),
+    enable_guardrails: bool = Form(True),
 ) -> Any:
     try:
         if use_session_dirs and not session_id:
@@ -132,6 +139,7 @@ async def chat_query(
             raise HTTPException(status_code=404, detail=f"FAISS index not found at: {index_dir}")
 
         rag = ConversationalRAG(session_id=session_id)
+        rag.enable_guardrails = enable_guardrails  # Control guardrails
         rag.load_retriever_from_faiss(index_dir, k=k, index_name=FAISS_INDEX_NAME)  # build retriever + chain
         
         # Track start time for response time analysis
@@ -151,7 +159,8 @@ async def chat_query(
             "engine": "LCEL-RAG",
             "cached": use_cache,
             "response_time_seconds": round(response_time, 3),
-            "model_used": rag.model_name  # Show which model was used
+            "model_used": rag.model_name,  # Show which model was used
+            "guardrails_enabled": enable_guardrails  # if guardrails were used
         }
     except HTTPException:
         raise
@@ -365,6 +374,57 @@ async def get_evaluation_overview() -> Any:
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get evaluation overview: {e}")
+
+@app.post("/chat/safety-check")
+async def safety_check(
+    question: str = Form(...),
+    session_id: Optional[str] = Form(None)
+) -> Any:
+    """Check if input is safe before processing"""
+    try:
+        session_id = session_id or "anonymous"
+        
+        result = rag_guardrails.validate_input(question, session_id)
+        
+        return {
+            "is_safe": result.is_safe,
+            "violations": [
+                {
+                    "type": v.violation_type.value,
+                    "severity": v.severity,
+                    "message": v.message,
+                    "confidence": v.confidence
+                }
+                for v in result.violations
+            ],
+            "filtered_content": result.filtered_content,
+            "timestamp": result.timestamp.isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Safety check failed: {e}")
+
+
+@app.get("/admin/guardrails-config")
+async def get_guardrails_config() -> Any:
+    """Get current guardrails configuration"""
+    try:
+        return {
+            "enabled": True,
+            "supported_checks": [
+                "malicious_prompts",
+                "pii_detection", 
+                "inappropriate_content",
+                "off_topic_detection",
+                "quality_validation"
+            ],
+            "violation_types": [e.value for e in GuardrailViolationType],
+            "severity_levels": ["low", "medium", "high", "critical"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get guardrails config: {e}")
+
+
 # command for executing the fast api
 # uvicorn api.main:app --reload    
 #uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload

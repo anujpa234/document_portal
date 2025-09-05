@@ -12,6 +12,9 @@ from langchain.output_parsers import PydanticOutputParser
 from utils.model_loader import ModelLoader
 from utils.token_counter import TokenCounter
 from utils.rag_evaluator import RAGEvaluator
+from utils.guardrails import rag_guardrails, GuardrailResult
+
+
 from exception.custom_exception import DocumentPortalException
 from logger.custom_logger import CustomLogger
 from prompt.prompt_library import PROMPT_REGISTRY
@@ -170,9 +173,14 @@ class ConversationalRAG:
             # Evaluation
             self.evaluator = rag_evaluator
             self.enable_evaluation = True
+            
+            # Guardrails
+            self.guardrails = rag_guardrails
+            self.enable_guardrails = True  # Default to enabled
 
             # Load LLM and prompts once
             self.llm = self._load_llm()
+            self.model_name = self._get_model_name()
             self.contextualize_prompt: ChatPromptTemplate = PROMPT_REGISTRY[
                 PromptType.CONTEXTUALIZE_QUESTION.value
             ]
@@ -341,6 +349,29 @@ class ConversationalRAG:
         Automatic memory management AND response caching.
         """
         try:
+            # Guardrails check
+            if self.enable_guardrails:
+                input_check = self.guardrails.validate_input(user_input, self.session_id)
+                
+                if not input_check.is_safe:
+                    # Return safety response instead of processing
+                    safety_response = self.guardrails.generate_safety_response(input_check.violations)
+                    
+                    # Still add to memory for conversation continuity
+                    self.memory.add_exchange(self.session_id, user_input, safety_response)
+                    
+                    self.log.warning("Input blocked by guardrails", 
+                                   session_id=self.session_id,
+                                   violations=[v.violation_type.value for v in input_check.violations])
+                    
+                    return safety_response
+                
+                # Use filtered input if available
+                processed_input = input_check.filtered_content if input_check.filtered_content else user_input
+            else:
+                processed_input = user_input
+            
+            
             if self.chain is None:
                 raise DocumentPortalException(
                     "RAG chain not initialized. Call load_retriever_from_faiss() before invoke().", sys
@@ -375,26 +406,58 @@ class ConversationalRAG:
             # Extract answer text
             answer_text = answer.answer if hasattr(answer, 'answer') else str(answer)
             
-            # Cache the response
-            self.response_cache.set(self.session_id, user_input, chat_history, answer)
+            # output guardrails check
+            if self.enable_guardrails:
+                output_check = self.guardrails.validate_output(answer_text, processed_input, self.session_id)
+                
+                if not output_check.is_safe:
+                    # Use filtered output or safety response
+                    if output_check.filtered_content:
+                        final_answer = output_check.filtered_content
+                    else:
+                        final_answer = self.guardrails.generate_safety_response(output_check.violations)
+                    
+                    self.log.warning("Output filtered by guardrails", 
+                                   session_id=self.session_id,
+                                   violations=[v.violation_type.value for v in output_check.violations])
+                else:
+                    final_answer = answer_text
+            else:
+                final_answer = answer_text
             
-            # Add exchange to memory
-            self.memory.add_exchange(self.session_id, user_input, answer_text)
+            # Track tokens (use original answer for accurate counting)
+            if hasattr(self, 'token_counter'):
+                usage = self.token_counter.track_usage(
+                    session_id=self.session_id,
+                    input_text=self._build_full_input_text(processed_input, chat_history, "context"),
+                    output_text=answer_text,  # Original answer for token counting
+                    model_name=self.model_name,
+                    request_type="main_query"
+                )
+            # Cache the original response (not filtered)
+            self.response_cache.set(self.session_id, processed_input, chat_history, answer)
+            
+            # Add exchange to memory (use original input, final filtered answer)
+            self.memory.add_exchange(self.session_id, user_input, final_answer)
             
             self.log.info(
-                "Chain invoked with memory and cache successfully",
+                "Chain invoked with guardrails successfully",
                 session_id=self.session_id,
                 user_input=user_input,
-                history_length=len(chat_history),
-                answer_preview=answer_text[:150],
-                cached=False
+                processed_input=processed_input,
+                guardrails_enabled=self.enable_guardrails,
+                final_answer_preview=final_answer[:150]
             )
             
-            return answer
+            return final_answer if self.enable_guardrails else answer
             
         except Exception as e:
             self.log.error("Failed to invoke ConversationalRAG with memory and cache", error=str(e))
             raise DocumentPortalException("Invocation with memory and cache error", sys)
+    
+    def check_safety(self, user_input: str) -> GuardrailResult:
+        """Check input safety without processing"""
+        return self.guardrails.validate_input(user_input, self.session_id)
 
     # Clear cache for session, optional if needed
     def clear_cache(self):
@@ -536,10 +599,76 @@ class ConversationalRAG:
                 }
                 | self.qa_prompt
                 | self.llm
-                | parser
+                | self._create_safe_parser(parser) 
             )
 
             self.log.info("LCEL graph built successfully", session_id=self.session_id)
         except Exception as e:
             self.log.error("Failed to build LCEL chain", error=str(e), session_id=self.session_id)
             raise DocumentPortalException("Failed to build LCEL chain", sys)
+
+
+    def _create_safe_parser(self, parser):
+        """Create a parser with fallback for when LLM doesn't return JSON"""
+        
+        def safe_parse(llm_output):
+            try:
+                # Try the original parser first
+                return parser.parse(llm_output)
+            except Exception as e:
+                self.log.warning("Parser failed, creating fallback response", 
+                            error=str(e), 
+                            session_id=self.session_id,
+                            llm_output_preview=str(llm_output)[:200])
+                
+                # Create a fallback DocumentAnswer from plain text
+                return self._create_fallback_answer(str(llm_output))
+        
+        return safe_parse
+
+    def _create_fallback_answer(self, text_response: str) -> DocumentAnswer:
+        """Create a DocumentAnswer object from plain text when parsing fails"""
+        try:
+            # Extract basic information from the text response
+            answer_text = str(text_response).strip()
+            
+            # Simple confidence scoring based on response length and content
+            confidence = 0.7  # Default medium confidence
+            if len(answer_text) > 200:
+                confidence = 0.8  # Longer responses get higher confidence
+            if "I don't know" in answer_text.lower() or "cannot" in answer_text.lower():
+                confidence = 0.3  # Lower confidence for uncertain responses
+            
+            # Try to identify if sources are mentioned in the text
+            sources = []
+            if "document" in answer_text.lower():
+                sources.append("referenced_document")
+            
+            # Determine answer type based on content
+            answer_type = "factual"
+            if any(word in answer_text.lower() for word in ["summary", "overview", "main"]):
+                answer_type = "summary"
+            elif any(word in answer_text.lower() for word in ["compare", "versus", "difference"]):
+                answer_type = "comparison"
+            elif any(word in answer_text.lower() for word in ["analyze", "analysis", "evaluate"]):
+                answer_type = "analysis"
+            
+            # Create fallback DocumentAnswer
+            return DocumentAnswer(
+                answer=answer_text,
+                confidence=confidence,
+                sources=sources,
+                reasoning="Generated from plain text response due to parsing failure",
+                answer_type=answer_type
+            )
+            
+        except Exception as e:
+            self.log.error("Failed to create fallback answer", error=str(e))
+            # Last resort fallback
+            return DocumentAnswer(
+                answer="I apologize, but I encountered an issue processing your request.",
+                confidence=0.1,
+                sources=[],
+                reasoning="System error during response generation",
+                answer_type="error"
+            )
