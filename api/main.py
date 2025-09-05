@@ -18,6 +18,7 @@ from src.document_compare.document_comparer import DocumentComparatorLLM
 from src.document_chat.retrieval import ConversationalRAG
 from utils.document_ops import FastAPIFileAdapter, read_pdf_via_handler
 from utils.token_counter import TokenCounter
+from utils.rag_evaluator import rag_evaluator
 
 # Global token counter instance
 token_counter = TokenCounter()
@@ -278,6 +279,92 @@ async def estimate_costs(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to estimate costs: {e}")
 
+@app.post("/chat/query-with-evaluation")
+async def chat_query_with_evaluation(
+    question: str = Form(...),
+    session_id: Optional[str] = Form(None),
+    ground_truth: Optional[str] = Form(None),  # For evaluation
+    use_session_dirs: bool = Form(True),
+    k: int = Form(5),
+    use_cache: bool = Form(True),
+) -> Any:
+    """Chat query with automatic evaluation"""
+    try:
+        if use_session_dirs and not session_id:
+            raise HTTPException(status_code=400, detail="session_id is required when use_session_dirs=True")
+        
+        index_dir = os.path.join(FAISS_BASE, session_id) if use_session_dirs else FAISS_BASE
+        if not os.path.isdir(index_dir):
+            raise HTTPException(status_code=404, detail=f"FAISS index not found at: {index_dir}")
+        
+        rag = ConversationalRAG(session_id=session_id)
+        rag.load_retriever_from_faiss(index_dir, k=k, index_name=FAISS_INDEX_NAME)
+        
+        # Use evaluation-enabled method
+        result = rag.invoke_with_evaluation(question, ground_truth=ground_truth)
+        
+        return {
+            "answer": result["answer"],
+            "session_id": session_id,
+            "k": k,
+            "engine": "LCEL-RAG-Evaluated",
+            "evaluation_metrics": result["evaluation"],
+            "evaluation_timestamp": result["evaluation_timestamp"],
+            "model_used": rag.model_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Query with evaluation failed: {e}")
+
+@app.get("/evaluation/session-summary")
+async def get_session_evaluation_summary(
+    session_id: str = Query(...)
+) -> Any:
+    """Get evaluation summary for a session"""
+    try:
+        summary = rag_evaluator.get_session_evaluation_summary(session_id)
+        return summary
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get evaluation summary: {e}")
+
+@app.get("/evaluation/metrics-overview") 
+async def get_evaluation_overview() -> Any:
+    """Get overall evaluation metrics across all sessions"""
+    try:
+        all_evaluations = rag_evaluator.evaluation_history
+        
+        if not all_evaluations:
+            return {"message": "No evaluations available", "total_evaluations": 0}
+        
+        # Aggregate all metrics
+        all_metrics = {}
+        for eval_result in all_evaluations:
+            for metric, value in eval_result.metrics.items():
+                if metric not in all_metrics:
+                    all_metrics[metric] = []
+                all_metrics[metric].append(value)
+        
+        # Calculate statistics
+        metric_stats = {}
+        for metric, values in all_metrics.items():
+            metric_stats[metric] = {
+                "average": sum(values) / len(values),
+                "min": min(values),
+                "max": max(values),
+                "count": len(values)
+            }
+        
+        return {
+            "total_evaluations": len(all_evaluations),
+            "unique_sessions": len(set(e.session_id for e in all_evaluations)),
+            "metric_statistics": metric_stats,
+            "latest_evaluation": all_evaluations[-1].metrics if all_evaluations else None
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get evaluation overview: {e}")
 # command for executing the fast api
 # uvicorn api.main:app --reload    
 #uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload

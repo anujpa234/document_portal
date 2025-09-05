@@ -11,6 +11,7 @@ from langchain.output_parsers import PydanticOutputParser
 
 from utils.model_loader import ModelLoader
 from utils.token_counter import TokenCounter
+from utils.rag_evaluator import RAGEvaluator
 from exception.custom_exception import DocumentPortalException
 from logger.custom_logger import CustomLogger
 from prompt.prompt_library import PROMPT_REGISTRY
@@ -142,6 +143,9 @@ conversation_memory = ConversationMemory()
 # Global token counter instance
 token_counter = TokenCounter()
 
+# Global evaluator instance
+rag_evaluator = RAGEvaluator()
+
 class ConversationalRAG:
     """
     LCEL-based Conversational RAG with lazy retriever initialization.
@@ -162,6 +166,10 @@ class ConversationalRAG:
             
             # Cache management
             self.response_cache = response_cache  
+            
+            # Evaluation
+            self.evaluator = rag_evaluator
+            self.enable_evaluation = True
 
             # Load LLM and prompts once
             self.llm = self._load_llm()
@@ -183,6 +191,79 @@ class ConversationalRAG:
             self.log.error("Failed to initialize ConversationalRAG", error=str(e))
             raise DocumentPortalException("Initialization error in ConversationalRAG", sys)
 
+    def invoke_with_evaluation(self, user_input: str, ground_truth: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Invoke with memory, cache, token tracking, AND evaluation.
+        Returns both answer and evaluation metrics.
+        """
+        try:
+            # Get the normal response
+            if hasattr(self, 'invoke_with_memory_and_cache'):
+                response = self.invoke_with_memory_and_cache(user_input)
+            else:
+                response = self.invoke_with_memory(user_input)
+            
+            # Extract answer and context for evaluation
+            answer_text = response.answer if hasattr(response, 'answer') else str(response)
+            sources = response.sources if hasattr(response, 'sources') else []
+            
+            # Get retrieved context (reconstruct from last retrieval)
+            contexts = self._get_last_retrieved_contexts(user_input)
+            
+            # Evaluate if enabled
+            evaluation_result = None
+            if self.enable_evaluation:
+                evaluation_result = self.evaluator.evaluate_response(
+                    question=user_input,
+                    answer=answer_text,
+                    contexts=contexts,
+                    session_id=self.session_id,
+                    ground_truth=ground_truth
+                )
+            
+            return {
+                "answer": response,
+                "evaluation": evaluation_result.metrics if evaluation_result else None,
+                "evaluation_timestamp": evaluation_result.timestamp.isoformat() if evaluation_result else None
+            }
+            
+        except Exception as e:
+            self.log.error("Failed to invoke with evaluation", error=str(e))
+            raise DocumentPortalException("Invocation with evaluation error", sys)
+    
+    def _get_last_retrieved_contexts(self, user_input: str) -> List[str]:
+        """Get the contexts that were retrieved for evaluation"""
+        try:
+            # Simulate retrieval to get contexts (for evaluation)
+            if self.retriever:
+                # Get rewritten question
+                chat_history = self.memory.get_history(self.session_id)
+                question_rewriter = (
+                    {"input": itemgetter("input"), "chat_history": itemgetter("chat_history")}
+                    | self.contextualize_prompt
+                    | self.llm
+                    | StrOutputParser()
+                )
+                rewritten_question = question_rewriter.invoke({
+                    "input": user_input, 
+                    "chat_history": chat_history
+                })
+                
+                # Retrieve documents
+                docs = self.retriever.invoke(rewritten_question)
+                return [getattr(doc, "page_content", str(doc)) for doc in docs]
+            
+            return []
+            
+        except Exception as e:
+            self.log.warning("Could not retrieve contexts for evaluation", error=str(e))
+            return []
+
+    def get_evaluation_summary(self) -> Dict[str, Any]:
+        """Get evaluation summary for this session"""
+        return self.evaluator.get_session_evaluation_summary(self.session_id)
+    
+    
     def _get_model_name(self) -> str:
         """Extract model name from LLM for cost tracking"""
         try:
